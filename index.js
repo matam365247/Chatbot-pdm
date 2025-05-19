@@ -1,14 +1,14 @@
-// התקנה: npm install whatsapp-web.js qrcode-terminal
+// התקנות: npm install whatsapp-web.js qrcode-terminal express
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const express = require('express');
 
-// שומר את הסשן בתיקייה "sessions"
+/* ---------- הגדרת הבוט ---------- */
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: 'sessions' }),
-  puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] } // חשוב ב-Render
+  puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] }   // חובה ב-Render
 });
 
-// זיכרון-מצב זמני לכל צ’אט
 const chats = new Map();   // chatId → { state, name, category }
 
 client.on('qr', qr => qrcode.generate(qr, { small: true }));
@@ -16,6 +16,7 @@ client.on('ready', () => console.log('✅ Bot is ready'));
 
 client.on('message', async msg => {
   const chatId = msg.from;
+
   if (!chats.has(chatId)) {
     await msg.reply(
 `שלום 
@@ -43,10 +44,10 @@ client.on('message', async msg => {
 
   if (data.state === 'awaitingMenu') {
     switch (msg.body.trim()) {
-      case '1': data.category = 'תקלת חומרה';     break;
-      case '2': data.category = 'בעיית תקשורת';   break;
-      case '3': data.category = 'בעיית הרשאות';   break;
-      case '4': data.category = 'אחר';             break;
+      case '1': data.category = 'תקלת חומרה';   break;
+      case '2': data.category = 'בעיית תקשורת'; break;
+      case '3': data.category = 'בעיית הרשאות'; break;
+      case '4': data.category = 'אחר';           break;
       default:
         await msg.reply('אנא הקלד/י 1, 2, 3 או 4.'); return;
     }
@@ -67,3 +68,9 @@ client.on('message', async msg => {
 });
 
 client.initialize();
+
+/* ---------- שרת Express קטן כדי לפתוח פורט ---------- */
+const app = express();
+app.get('/', (_, res) => res.send('Bot alive ✓'));
+const PORT = process.env.PORT || 3000;   // Render מקצה PORT אוטומטי
+app.listen(PORT, () => console.log('HTTP server listening on', PORT));
