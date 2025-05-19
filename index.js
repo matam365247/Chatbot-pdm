@@ -4,30 +4,36 @@ const qrcodeTerminal = require('qrcode-terminal');
 const QRCode         = require('qrcode');
 const express        = require('express');
 
-/* ---------- חיבור ל-WhatsApp ---------- */
+/* ── חיבור ל-WhatsApp ── */
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: 'sessions' }),
   puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] }   // נדרש ב-Render
 });
 
 const chats    = new Map();   // chatId → { state, name, category }
-let   latestQR = '';          // QR אחרון להצגה כ-/qr
+let   latestQR = '';          // QR אחרון להצגה במסלול ‎/qr
 
-/* ---------- QR בקונסול וב-/qr ---------- */
+/* ── הצגת QR (לוג + /qr) ── */
 client.on('qr', qr => {
   latestQR = qr;
-  qrcodeTerminal.generate(qr, { small: false });   // QR גדול בלוג
+  qrcodeTerminal.generate(qr, { small: false });    // QR גדול בלוג
 });
 
-/* ---------- ברכת מוכנות ---------- */
+/* ── כשהבוט מוכן ── */
 client.on('ready', () => console.log('✅ Bot is ready'));
 
-/* ---------- הודעות נכנסות ---------- */
+/* ── טיפול בכל הודעה ── */
 client.on('message', async msg => {
   const chatId = msg.from;
   const text   = msg.body.trim();
 
-  /* ⇢ reset בכל שלב */
+  /* ← סינון מוחלט של קבוצות */
+  if (msg.isGroupMsg || chatId.endsWith('@g.us')) {
+    console.log('⤷ group message ignored:', chatId);
+    return;   // הבוט לא מגיב בקבוצות
+  }
+
+  /* ← איפוס השיחה ב-"start" */
   if (text.toLowerCase() === 'start') {
     chats.set(chatId, { state: 'awaitingName' });
     await msg.reply(
@@ -37,7 +43,7 @@ client.on('message', async msg => {
     return;
   }
 
-  /* ⇢ הודעה ראשונה (ללא reset) */
+  /* ← הודעה ראשונה (ללא reset) */
   if (!chats.has(chatId)) {
     chats.set(chatId, { state: 'awaitingName' });
     await msg.reply(
@@ -47,7 +53,7 @@ client.on('message', async msg => {
     return;
   }
 
-  /* שליפת מצב קיים */
+  /* ← המשך תהליך השיחה */
   const data = chats.get(chatId);
 
   if (data.state === 'awaitingName') {
@@ -87,10 +93,10 @@ client.on('message', async msg => {
   }
 });
 
-/* ---------- הפעלת הקליינט ---------- */
+/* ── הפעלת הקליינט ── */
 client.initialize();
 
-/* ---------- שרת Express קטן (פורט + /qr) ---------- */
+/* ── שרת Express קטן (פורט + /qr) ── */
 const app = express();
 
 app.get('/', (_, res) => res.send('Bot alive ✓'));
@@ -101,5 +107,5 @@ app.get('/qr', async (_, res) => {
   res.type('image/svg+xml').send(svg);
 });
 
-const PORT = process.env.PORT || 3000;   // Render מקצה PORT
+const PORT = process.env.PORT || 3000;   // Render מקצה PORT אוטומטי
 app.listen(PORT, () => console.log('HTTP server listening on', PORT));
