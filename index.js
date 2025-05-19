@@ -1,43 +1,58 @@
-// התקנות נחוצות:  npm install whatsapp-web.js qrcode-terminal express qrcode
+// התקנות:  npm install whatsapp-web.js qrcode-terminal express qrcode
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcodeTerminal = require('qrcode-terminal');
-const QRCode = require('qrcode');
-const express = require('express');
+const QRCode         = require('qrcode');
+const express        = require('express');
 
-/* ---------- הגדרת הבוט ---------- */
+/* ---------- חיבור ל-WhatsApp ---------- */
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: 'sessions' }),
-  puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] }   // חשוב ב-Render
+  puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] }   // נדרש ב-Render
 });
 
-const chats = new Map();        // chatId → { state, name, category }
-let latestQR = '';              // נשמור את ה-QR האחרון להצגה כ-תמונה
+const chats    = new Map();   // chatId → { state, name, category }
+let   latestQR = '';          // QR אחרון להצגה כ-/qr
 
+/* ---------- QR בקונסול וב-/qr ---------- */
 client.on('qr', qr => {
-  latestQR = qr;                                   // שמירת ה-QR
+  latestQR = qr;
   qrcodeTerminal.generate(qr, { small: false });   // QR גדול בלוג
 });
 
+/* ---------- ברכת מוכנות ---------- */
 client.on('ready', () => console.log('✅ Bot is ready'));
 
+/* ---------- הודעות נכנסות ---------- */
 client.on('message', async msg => {
   const chatId = msg.from;
+  const text   = msg.body.trim();
 
-  if (!chats.has(chatId)) {
+  /* ⇢ reset בכל שלב */
+  if (text.toLowerCase() === 'start') {
+    chats.set(chatId, { state: 'awaitingName' });
     await msg.reply(
 `שלום וברוכים הבאים למוקד התמיכה של מדור מערכות מידע.
 אנו מטפלים כעת בפניות קודמות ונשוב אליך בהקדם האפשרי.
 לצורך המשך הטיפול, אנא כתוב/כתבי את שמך המלא.`);
-    chats.set(chatId, { state: 'awaitingName' });
     return;
   }
 
+  /* ⇢ הודעה ראשונה (ללא reset) */
+  if (!chats.has(chatId)) {
+    chats.set(chatId, { state: 'awaitingName' });
+    await msg.reply(
+`שלום וברוכים הבאים למוקד התמיכה של מדור מערכות מידע.
+אנו מטפלים כעת בפניות קודמות ונשוב אליך בהקדם האפשרי.
+לצורך המשך הטיפול, אנא כתוב/כתבי את שמך המלא.`);
+    return;
+  }
+
+  /* שליפת מצב קיים */
   const data = chats.get(chatId);
 
   if (data.state === 'awaitingName') {
-    const name = msg.body.trim().split(/\s+/)[0];
-    data.name = name;
-    data.state = 'awaitingMenu';
+    const name = text.split(/\s+/)[0];
+    Object.assign(data, { name, state: 'awaitingMenu' });
     await msg.reply(
 `תודה ${name}, אנא בחר/י באופציה המתאימה:
 1️⃣ תקלת חומרה
@@ -48,7 +63,7 @@ client.on('message', async msg => {
   }
 
   if (data.state === 'awaitingMenu') {
-    switch (msg.body.trim()) {
+    switch (text) {
       case '1': data.category = 'תקלת חומרה';   break;
       case '2': data.category = 'בעיית תקשורת'; break;
       case '3': data.category = 'בעיית הרשאות'; break;
@@ -68,24 +83,23 @@ client.on('message', async msg => {
   }
 
   if (data.state === 'done') {
-    await msg.reply('קיבלנו. לפתיחת פנייה חדשה כתוב/י ‎!start‎.');
+    await msg.reply('קיבלנו. לפתיחת פנייה חדשה כתוב/י ‎start‎.');
   }
 });
 
+/* ---------- הפעלת הקליינט ---------- */
 client.initialize();
 
-/* ---------- שרת Express קטן לשמירת פורט ולתצוגת QR ---------- */
+/* ---------- שרת Express קטן (פורט + /qr) ---------- */
 const app = express();
 
-/* בדיקת חיים בסיסית */
 app.get('/', (_, res) => res.send('Bot alive ✓'));
 
-/* תצוגת ה-QR כתמונה SVG */
 app.get('/qr', async (_, res) => {
-  if (!latestQR) return res.send('QR not ready, נסה שוב בעוד רגע');
+  if (!latestQR) return res.send('QR not ready, נסה שוב בעוד רגע.');
   const svg = await QRCode.toString(latestQR, { type: 'svg' });
   res.type('image/svg+xml').send(svg);
 });
 
-const PORT = process.env.PORT || 3000;             // Render מקצה PORT אוטומטי
+const PORT = process.env.PORT || 3000;   // Render מקצה PORT
 app.listen(PORT, () => console.log('HTTP server listening on', PORT));
