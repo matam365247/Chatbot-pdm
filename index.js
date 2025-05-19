@@ -6,12 +6,16 @@ const express = require('express');
 /* ---------- הגדרת הבוט ---------- */
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: 'sessions' }),
-  puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] }   // חובה ב-Render
+  puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] }   // חשוב ב-Render
 });
 
 const chats = new Map();   // chatId → { state, name, category }
 
-client.on('qr', qr => qrcode.generate(qr, { small: true }));
+client.on('qr', qr => {
+  // QR גדול ולכן קל יותר לסריקה
+  qrcode.generate(qr, { small: false });
+});
+
 client.on('ready', () => console.log('✅ Bot is ready'));
 
 client.on('message', async msg => {
@@ -72,5 +76,5 @@ client.initialize();
 /* ---------- שרת Express קטן כדי לפתוח פורט ---------- */
 const app = express();
 app.get('/', (_, res) => res.send('Bot alive ✓'));
-const PORT = process.env.PORT || 3000;   // Render מקצה PORT אוטומטי
+const PORT = process.env.PORT || 3000;        // Render מקצה PORT אוטומטי
 app.listen(PORT, () => console.log('HTTP server listening on', PORT));
