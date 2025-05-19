@@ -1,6 +1,7 @@
-// התקנות: npm install whatsapp-web.js qrcode-terminal express
+// התקנות נחוצות:  npm install whatsapp-web.js qrcode-terminal express qrcode
 const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
+const qrcodeTerminal = require('qrcode-terminal');
+const QRCode = require('qrcode');
 const express = require('express');
 
 /* ---------- הגדרת הבוט ---------- */
@@ -9,11 +10,12 @@ const client = new Client({
   puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] }   // חשוב ב-Render
 });
 
-const chats = new Map();   // chatId → { state, name, category }
+const chats = new Map();        // chatId → { state, name, category }
+let latestQR = '';              // נשמור את ה-QR האחרון להצגה כ-תמונה
 
 client.on('qr', qr => {
-  // QR גדול ולכן קל יותר לסריקה
-  qrcode.generate(qr, { small: false });
+  latestQR = qr;                                   // שמירת ה-QR
+  qrcodeTerminal.generate(qr, { small: false });   // QR גדול בלוג
 });
 
 client.on('ready', () => console.log('✅ Bot is ready'));
@@ -73,8 +75,18 @@ client.on('message', async msg => {
 
 client.initialize();
 
-/* ---------- שרת Express קטן כדי לפתוח פורט ---------- */
+/* ---------- שרת Express קטן לשמירת פורט ולתצוגת QR ---------- */
 const app = express();
+
+/* בדיקת חיים בסיסית */
 app.get('/', (_, res) => res.send('Bot alive ✓'));
-const PORT = process.env.PORT || 3000;        // Render מקצה PORT אוטומטי
+
+/* תצוגת ה-QR כתמונה SVG */
+app.get('/qr', async (_, res) => {
+  if (!latestQR) return res.send('QR not ready, נסה שוב בעוד רגע');
+  const svg = await QRCode.toString(latestQR, { type: 'svg' });
+  res.type('image/svg+xml').send(svg);
+});
+
+const PORT = process.env.PORT || 3000;             // Render מקצה PORT אוטומטי
 app.listen(PORT, () => console.log('HTTP server listening on', PORT));
