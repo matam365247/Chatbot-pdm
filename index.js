@@ -1,66 +1,94 @@
-// התקנות:  npm install whatsapp-web.js qrcode-terminal express qrcode
+/**
+ * תלות-התקנה:
+ *   npm install whatsapp-web.js qrcode-terminal express qrcode
+ */
+
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcodeTerminal         = require('qrcode-terminal');
 const QRCode                 = require('qrcode');
 const express                = require('express');
 
-/* ── WhatsApp client ── */
+/* ─────────────────────  הגדרת WhatsApp Web  ───────────────────── */
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: 'sessions' }),
   puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] }
 });
 
-const chats = new Map();     // chatId → { state, name, category, details }
-let   latestQR = '';         // QR for /qr
+/* chatId → { state, name, category, details } */
+const chats   = new Map();
+let   latestQR = '';
 
-/* ── QR למסוף + /qr ── */
+/* ─────────────────────  QR למסוף + /qr  ───────────────────── */
 client.on('qr', qr => {
   latestQR = qr;
-  qrcodeTerminal.generate(qr, { small: false });
+  qrcodeTerminal.generate(qr, { small: false });     // QR גדול וברור
 });
 client.on('ready', () => console.log('✅ Bot is ready'));
 
-/* ── הודעות ── */
+/* ─────────────────────  Handler לכל הודעה  ───────────────────── */
 client.on('message', async msg => {
   const chatId = msg.from;
   const text   = msg.body.trim();
 
-  /* סינון קבוצות */
+  /* ➊ - התעלמות מוחלטת מקבוצות */
   if (msg.isGroupMsg || chatId.endsWith('@g.us')) return;
 
-  /* reset */
-  if (text.toLowerCase() === 'start') {
+  /* ➋ - 0 = פתיחת קריאה חדשה בכל מצב */
+  if (text === '0' || text.toLowerCase() === 'start') {
     chats.set(chatId, { state: 'awaitingName' });
     await msg.reply(
 `שלום וברוכים הבאים למוקד התמיכה של מדור מערכות מידע.
 אנו מטפלים כעת בפניות קודמות ונשוב אליך בהקדם האפשרי.
-לצורך המשך הטיפול, אנא כתוב/כתבי את שמך המלא.
-
-*התחל קריאה חדשה:* https://wa.me/?text=start`);
+לצורך המשך הטיפול, אנא כתוב/כתבי את שמך המלא.`);
     return;
   }
 
-  /* יצירת סשן חדש אם אין */
+  /* יצירה אוטומטית של סשן אם אין בכלל */
   if (!chats.has(chatId)) {
     chats.set(chatId, { state: 'awaitingName' });
     await msg.reply(
 `שלום וברוכים הבאים למוקד התמיכה של מדור מערכות מידע.
 אנו מטפלים כעת בפניות קודמות ונשוב אליך בהקדם האפשרי.
-לצורך המשך הטיפול, אנא כתוב/כתבי את שמך המלא.
-
-*התחל קריאה חדשה:* https://wa.me/?text=start`);
+לצורך המשך הטיפול, אנא כתוב/כתבי את שמך המלא.`);
     return;
   }
 
   const data = chats.get(chatId);
 
-  /* מצב סגור – משיבים רק לינק לפתיחה חדשה */
+  /* ➌ - מצב סגור: רק 0 או 8 חוקיים */
   if (data.state === 'closed') {
-    await msg.reply('הפנייה נסגרה.\n*התחל קריאה חדשה:* https://wa.me/?text=start');
+    if (text === '8') {
+      data.state = 'awaitingExtra';
+      await msg.reply('אנא פרט/י את התוכן הנוסף לפנייה האחרונה:');
+    } else {
+      await msg.reply(
+'הפנייה נסגרה.\nלפתיחת קריאה חדשה – רשום 0\nלהוספת תוכן לקריאה האחרונה – רשום 8');
+    }
     return;
   }
 
-  /* קבלת שם */
+  /* ➍ - הוספת תוכן נוסף (8) */
+  if (data.state === 'awaitingExtra') {
+    data.details += `\n[השלמה] ${text}`;
+
+    /* הודעה קצרה */
+    await msg.reply('התוכן התווסף בהצלחה.');
+
+    /* סיכום עדכני מלא */
+    await msg.reply(
+`סיכום פנייתך:
+• שם: ${data.name}
+• נושא: ${data.category}
+• תיאור: ${data.details}
+
+תודה! פנייתך התקבלה בהצלחה ונחזור אליך בהקדם.
+לפתיחת קריאה חדשה – רשום 0
+להוספת תוכן לקריאה האחרונה – רשום 8`);
+    data.state = 'closed';
+    return;
+  }
+
+  /* ➎ - המשך התהליך הרגיל */
   if (data.state === 'awaitingName') {
     data.name  = text.split(/\s+/)[0];
     data.state = 'awaitingMenu';
@@ -76,7 +104,6 @@ client.on('message', async msg => {
     return;
   }
 
-  /* בחירת נושא */
   if (data.state === 'awaitingMenu') {
     const menu = {
       '1': 'אין לי רשת',
@@ -96,7 +123,6 @@ client.on('message', async msg => {
     return;
   }
 
-  /* קבלת תיאור → סיכום מיידי */
   if (data.state === 'awaitingDetails') {
     data.details = text;
     await msg.reply(
@@ -105,14 +131,15 @@ client.on('message', async msg => {
 • נושא: ${data.category}
 • תיאור: ${data.details}
 
-תודה! פנייתך נקלטה ונחזור אליך בהקדם.
-*התחל קריאה חדשה:* https://wa.me/?text=start`);
-    data.state = 'closed';   // מכאן ואילך נענה רק בלינק לפתיחה חדשה
+תודה! פנייתך התקבלה בהצלחה ונחזור אליך בהקדם.
+לפתיחת קריאה חדשה – רשום 0
+להוספת תוכן לקריאה האחרונה – רשום 8`);
+    data.state = 'closed';
     return;
   }
 });
 
-/* ── Express קטן ── */
+/* ─────────────────────  אקספרס קטן ל-/qr  ───────────────────── */
 const app = express();
 app.get('/', (_, r) => r.send('Bot alive ✓'));
 app.get('/qr', async (_, r) => {
