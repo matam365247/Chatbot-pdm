@@ -1,67 +1,66 @@
 /**
- * התקנות:
- *   npm install whatsapp-web.js qrcode-terminal express qrcode
+ * התקנות:  npm install whatsapp-web.js qrcode-terminal express qrcode
  */
-
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcodeTerminal         = require('qrcode-terminal');
 const QRCode                 = require('qrcode');
 const express                = require('express');
 
-/* ===== הגדרות כלליות ===== */
-const SUMMARY_GROUP_NAME = 'סיכום קריאות פדם';   // שם הקבוצה לקבלת סיכומים
-let   summaryGroupId     = null;                 // ימולא ב-on ready
+/* ====== הגדרות כלליות ====== */
+const SUMMARY_GROUP_NAME = 'סיכום קריאות פדם';
+let   summaryGroupId     = null;      // ימולא דינמית
 
-/* ===== יצירת WhatsApp-Web client ===== */
+/* ====== יצירת WhatsApp-Web client ====== */
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: 'sessions' }),
   puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] }
 });
 
-/* chatId → { state, fullName, category, details, ticketId, mutedUntil } */
-const chats   = new Map();
+/* chatId → { state, fullName, category, details,
+              ticketId, mutedUntil } */
+const chats = new Map();
+let latestQR = '';
 
-let latestQR = '';  // עבור /qr
+/* עיצוב שם: אות ראשונה גדולה */
+const formatName = s => s.trim().split(/\s+/)
+  .map(w => w[0].toUpperCase() + w.slice(1).toLowerCase()).join(' ');
 
-/* ===== כלי עזר: עיצוב שם ===== */
-function formatName(str) {
-  return str
-    .trim()
-    .split(/\s+/)
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join(' ');
-}
-
-/* ===== QR למסוף ול־/qr ===== */
+/* ====== QR למסוף + /qr ====== */
 client.on('qr', qr => {
   latestQR = qr;
   qrcodeTerminal.generate(qr, { small: false });
 });
 
-/* ===== כאשר הבוט מוכן ===== */
+/* ====== איתור הקבוצה ברגע שהבוט מוכן ====== */
+async function findSummaryGroup() {
+  const allChats = await client.getChats();
+  const g        = allChats.find(c => c.isGroup && c.name === SUMMARY_GROUP_NAME);
+  if (g) summaryGroupId = g.id._serialized;
+}
+
 client.on('ready', async () => {
   console.log('✅ Bot is ready');
-
-  // איתור הקבוצה לסיכומים
-  const allChats = await client.getChats();
-  const grp      = allChats.find(c => c.isGroup && c.name === SUMMARY_GROUP_NAME);
-  if (grp) {
-    summaryGroupId = grp.id._serialized;
-    console.log(`ℹ️  סיכומים יישלחו לקבוצה "${SUMMARY_GROUP_NAME}"`);
-  } else {
-    console.log(`⚠️  הקבוצה "${SUMMARY_GROUP_NAME}" לא נמצאה – סיכומים לא יועברו`);
-  }
+  await findSummaryGroup();
+  if (summaryGroupId) console.log(`ℹ️  נמצאה הקבוצה “${SUMMARY_GROUP_NAME}”`);
+  else                 console.log(`⚠️  קבוצה “${SUMMARY_GROUP_NAME}” לא נמצאה (עדיין)`);
 });
 
-/* ===== מנגנון ההודעות ===== */
+/* ====== פונקציית עזר: שליחת סיכום לקבוצה ====== */
+async function sendSummaryToGroup(text) {
+  if (!summaryGroupId) await findSummaryGroup();
+  if (summaryGroupId)  await client.sendMessage(summaryGroupId, text);
+  else                 console.log('⚠️  לא נשלח – קבוצה לא קיימת');
+}
+
+/* ====== Handler הודעות ====== */
 client.on('message', async msg => {
   const chatId = msg.from;
   const text   = msg.body.trim();
 
-  /* להתעלם מקבוצות */
+  /* התעלמות מקבוצות */
   if (msg.isGroupMsg || chatId.endsWith('@g.us')) return;
 
-  /* --- 0 / start = פתיחת קריאה חדשה --- */
+  /* 0 / start – פתיחה מחדש */
   if (text === '0' || text.toLowerCase() === 'start') {
     chats.set(chatId, { state: 'awaitingName' });
     await msg.reply(
@@ -71,7 +70,7 @@ client.on('message', async msg => {
     return;
   }
 
-  /* אם אין צ'אט קיים – להתחיל */
+  /* יצירת סשן אם אין */
   if (!chats.has(chatId)) {
     chats.set(chatId, { state: 'awaitingName' });
     await msg.reply(
@@ -83,13 +82,13 @@ client.on('message', async msg => {
 
   const data = chats.get(chatId);
 
-  /* -------- מצב mute (8️⃣) -------- */
+  /* mute פעיל? */
   if (data.state === 'muted' && Date.now() < data.mutedUntil) return;
-  if (data.state === 'muted') data.state = 'closed';   // עברו 120 דק'
+  if (data.state === 'muted') data.state = 'closed';
 
-  /* -------- מצב closed -------- */
+  /* מצב closed */
   if (data.state === 'closed') {
-    if (text === '9') {                    // הוספת תוכן לקריאה האחרונה
+    if (text === '9') {
       data.state = 'awaitingExtra';
       await msg.reply('אנא פרט/י את התוכן הנוסף לקריאה האחרונה:');
     } else {
@@ -99,13 +98,12 @@ client.on('message', async msg => {
     return;
   }
 
-  /* -------- awaitingExtra (9️⃣) -------- */
+  /* awaitingExtra – הוספת תוכן */
   if (data.state === 'awaitingExtra') {
     data.details += `\n[השלמה] ${text}`;
-
     await msg.reply('התוכן התווסף בהצלחה.');
 
-    const summary = 
+    const summary =
 `סיכום קריאה:
 • מספר קריאה: ${data.ticketId}
 • שם: ${data.fullName}
@@ -117,14 +115,12 @@ client.on('message', async msg => {
 0️⃣ – פתיחת קריאה חדשה
 9️⃣ – הוספת תוכן לקריאה האחרונה`);
 
-    if (summaryGroupId)
-      await client.sendMessage(summaryGroupId, summary);
-
+    await sendSummaryToGroup(summary);
     data.state = 'closed';
     return;
   }
 
-  /* -------- קבלת שם -------- */
+  /* awaitingName – קליטת שם מלא */
   if (data.state === 'awaitingName') {
     data.fullName = formatName(text);
     data.state    = 'awaitingMenu';
@@ -141,7 +137,7 @@ client.on('message', async msg => {
     return;
   }
 
-  /* -------- בחירת נושא -------- */
+  /* awaitingMenu – בחירת נושא או 8️⃣ */
   if (data.state === 'awaitingMenu') {
     const menu = {
       '1': 'אין לי רשת',
@@ -153,14 +149,11 @@ client.on('message', async msg => {
       '7': 'אחר',
       '8': 'Mute-120'
     };
+    if (!menu[text]) { await msg.reply('אנא הקלד/י מספר בין 1 ל-8.'); return; }
 
-    if (!menu[text]) {
-      await msg.reply('אנא הקלד/י מספר בין 1 ל-8.'); return;
-    }
-
-    /* --- 8️⃣ = mute --- */
+    /* 8️⃣ – mute ל-120 דקות */
     if (text === '8') {
-      data.mutedUntil = Date.now() + 120 * 60 * 1000; // 120 דקות
+      data.mutedUntil = Date.now() + 120 * 60 * 1000;
       data.state      = 'muted';
       await msg.reply(
 'נמשיך לטפל בקריאה בצ’אט זה, ללא פתיחת קריאה חדשה.\n' +
@@ -169,15 +162,15 @@ client.on('message', async msg => {
       return;
     }
 
-    /* --- 1️⃣-7️⃣ – נושא רגיל --- */
-    data.category  = menu[text];
-    data.ticketId  = Math.floor(10000 + Math.random() * 90000);  // מספר קריאה
-    data.state     = 'awaitingDetails';
-    await msg.reply(`רשמנו “${data.category}” (מס׳ קריאה ${data.ticketId}). נא פרט/י את הבעיה בקצרה:`);
+    /* 1️⃣-7️⃣ – נושא רגיל */
+    data.category = menu[text];
+    data.ticketId = Math.floor(10000 + Math.random() * 90000); // נוצר אבל *לא* מוצג
+    data.state    = 'awaitingDetails';
+    await msg.reply(`רשמנו “${data.category}”. נא פרט/י את הבעיה בקצרה:`);
     return;
   }
 
-  /* -------- קבלת תיאור -------- */
+  /* awaitingDetails – תיאור + סיכום */
   if (data.state === 'awaitingDetails') {
     data.details = text;
 
@@ -193,17 +186,15 @@ client.on('message', async msg => {
 0️⃣ – פתיחת קריאה חדשה
 9️⃣ – הוספת תוכן לקריאה האחרונה`);
 
-    if (summaryGroupId)
-      await client.sendMessage(summaryGroupId, summary);
-
+    await sendSummaryToGroup(summary);
     data.state = 'closed';
     return;
   }
 });
 
-/* ===== שרת Express קטן ל־/qr ===== */
+/* ====== Express קטן ל־/qr ====== */
 const app = express();
-app.get('/',  (_, r) => r.send('Bot alive ✓'));
+app.get('/', (_, r) => r.send('Bot alive ✓'));
 app.get('/qr', async (_, r) => {
   if (!latestQR) return r.send('QR not ready, נסה שוב בעוד רגע.');
   const svg = await QRCode.toString(latestQR, { type: 'svg' });
@@ -212,5 +203,4 @@ app.get('/qr', async (_, r) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('HTTP on', PORT));
 
-/* ===== הפעלת הבוט ===== */
 client.initialize();
