@@ -1,39 +1,46 @@
 /**
- * תלות-התקנה:
+ * התקנות:
  *   npm install whatsapp-web.js qrcode-terminal express qrcode
  */
-
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcodeTerminal         = require('qrcode-terminal');
 const QRCode                 = require('qrcode');
 const express                = require('express');
 
-/* ─────────────────────  הגדרת WhatsApp Web  ───────────────────── */
+/* ── WhatsApp client ── */
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: 'sessions' }),
   puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] }
 });
 
-/* chatId → { state, name, category, details } */
+/* chatId → { state, fullName, category, details, mutedUntil } */
 const chats   = new Map();
 let   latestQR = '';
 
-/* ─────────────────────  QR למסוף + /qr  ───────────────────── */
+/* ── QR למסוף + /qr ── */
 client.on('qr', qr => {
   latestQR = qr;
-  qrcodeTerminal.generate(qr, { small: false });     // QR גדול וברור
+  qrcodeTerminal.generate(qr, { small: false });
 });
 client.on('ready', () => console.log('✅ Bot is ready'));
 
-/* ─────────────────────  Handler לכל הודעה  ───────────────────── */
+/* ── Helper קטן לעיצוב שם: כל מילה אות גדולה ── */
+function formatName(input) {
+  return input
+    .split(/\s+/)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
+/* ── Handler עיקרי ── */
 client.on('message', async msg => {
   const chatId = msg.from;
   const text   = msg.body.trim();
 
-  /* ➊ - התעלמות מוחלטת מקבוצות */
+  /* סינון קבוצות */
   if (msg.isGroupMsg || chatId.endsWith('@g.us')) return;
 
-  /* ➋ - 0 = פתיחת קריאה חדשה בכל מצב */
+  /* 0 = פתיחת קריאה חדשה */
   if (text === '0' || text.toLowerCase() === 'start') {
     chats.set(chatId, { state: 'awaitingName' });
     await msg.reply(
@@ -43,7 +50,7 @@ client.on('message', async msg => {
     return;
   }
 
-  /* יצירה אוטומטית של סשן אם אין בכלל */
+  /* יצירת סשן חדש אם אין */
   if (!chats.has(chatId)) {
     chats.set(chatId, { state: 'awaitingName' });
     await msg.reply(
@@ -55,55 +62,59 @@ client.on('message', async msg => {
 
   const data = chats.get(chatId);
 
-  /* ➌ - מצב סגור: רק 0 או 8 חוקיים */
+  /* ── mute (8️⃣) ── */
+  if (data.state === 'muted' && Date.now() < data.mutedUntil) return;
+  if (data.state === 'muted') data.state = 'closed';
+
+  /* ── מצב closed ── */
   if (data.state === 'closed') {
-    if (text === '8') {
+    if (text === '9') {
       data.state = 'awaitingExtra';
-      await msg.reply('אנא פרט/י את התוכן הנוסף לפנייה האחרונה:');
+      await msg.reply('אנא פרט/י את התוכן הנוסף לקריאה האחרונה:');
     } else {
       await msg.reply(
-'הפנייה נסגרה.\nלפתיחת קריאה חדשה – רשום 0\nלהוספת תוכן לקריאה האחרונה – רשום 8');
+'קריאה זו נסגרה.\n0️⃣ – פתיחת קריאה חדשה\n9️⃣ – הוספת תוכן לקריאה האחרונה');
     }
     return;
   }
 
-  /* ➍ - הוספת תוכן נוסף (8) */
+  /* ── הוספת תוכן נוסף (9️⃣) ── */
   if (data.state === 'awaitingExtra') {
     data.details += `\n[השלמה] ${text}`;
 
-    /* הודעה קצרה */
     await msg.reply('התוכן התווסף בהצלחה.');
 
-    /* סיכום עדכני מלא */
     await msg.reply(
-`סיכום פנייתך:
-• שם: ${data.name}
+`סיכום קריאה:
+• שם: ${data.fullName}
 • נושא: ${data.category}
 • תיאור: ${data.details}
 
-תודה! פנייתך התקבלה בהצלחה ונחזור אליך בהקדם.
-לפתיחת קריאה חדשה – רשום 0
-להוספת תוכן לקריאה האחרונה – רשום 8`);
+תודה! קריאתך התקבלה בהצלחה ונחזור אליך בהקדם.
+0️⃣ – פתיחת קריאה חדשה
+9️⃣ – הוספת תוכן לקריאה האחרונה`);
     data.state = 'closed';
     return;
   }
 
-  /* ➎ - המשך התהליך הרגיל */
+  /* ── קליטת שם מלא ── */
   if (data.state === 'awaitingName') {
-    data.name  = text.split(/\s+/)[0];
-    data.state = 'awaitingMenu';
+    data.fullName = formatName(text);          // שומר את כל השם
+    data.state    = 'awaitingMenu';
     await msg.reply(
-`תודה ${data.name}, אנא בחר/י באופציה המתאימה:
+`תודה ${data.fullName}, אנא בחר/י באופציה המתאימה:
 1️⃣ אין לי רשת
 2️⃣ לא נדלק לי המחשב/המסך
 3️⃣ לא נכנס לי לתיקיות
 4️⃣ יצירת יוזר
 5️⃣ איפוס סיסמה ליוזר
 6️⃣ איטיות במחשב
-7️⃣ אחר`);
+7️⃣ אחר
+8️⃣ שוחחנו כעת – המשך טיפול בצ’אט זה (ללא פתיחת קריאה חדשה)`);
     return;
   }
 
+  /* ── בחירת נושא ── */
   if (data.state === 'awaitingMenu') {
     const menu = {
       '1': 'אין לי רשת',
@@ -112,34 +123,47 @@ client.on('message', async msg => {
       '4': 'יצירת יוזר',
       '5': 'איפוס סיסמה ליוזר',
       '6': 'איטיות במחשב',
-      '7': 'אחר'
+      '7': 'אחר',
+      '8': 'Mute-120'
     };
-    if (!menu[text]) {
-      await msg.reply('אנא הקלד/י מספר בין 1 ל-7.'); return;
+    if (!menu[text]) { await msg.reply('אנא הקלד/י מספר בין 1 ל-8.'); return; }
+
+    /* 8️⃣ – השתקה 120 דק׳ */
+    if (text === '8') {
+      data.mutedUntil = Date.now() + 120 * 60 * 1000;
+      data.state      = 'muted';
+      await msg.reply(
+'נמשיך לטפל בקריאה בצ’אט זה, ללא פתיחת קריאה חדשה.\n' +
+'0️⃣ – פתיחת קריאה חדשה\n' +
+'9️⃣ – הוספת תוכן לקריאה האחרונה (זמין לאחר הסיכום)');
+      return;
     }
+
+    /* 1️⃣-7️⃣ – נושא רגיל */
     data.category = menu[text];
     data.state    = 'awaitingDetails';
     await msg.reply(`רשמנו “${data.category}”. נא פרט/י את הבעיה בקצרה:`);
     return;
   }
 
+  /* ── קליטת תיאור ── */
   if (data.state === 'awaitingDetails') {
     data.details = text;
     await msg.reply(
-`סיכום פנייתך:
-• שם: ${data.name}
+`סיכום קריאה:
+• שם: ${data.fullName}
 • נושא: ${data.category}
 • תיאור: ${data.details}
 
-תודה! פנייתך התקבלה בהצלחה ונחזור אליך בהקדם.
-לפתיחת קריאה חדשה – רשום 0
-להוספת תוכן לקריאה האחרונה – רשום 8`);
+תודה! קריאתך התקבלה בהצלחה ונחזור אליך בהקדם.
+0️⃣ – פתיחת קריאה חדשה
+9️⃣ – הוספת תוכן לקריאה האחרונה`);
     data.state = 'closed';
     return;
   }
 });
 
-/* ─────────────────────  אקספרס קטן ל-/qr  ───────────────────── */
+/* ── Express קטן ל־/qr ── */
 const app = express();
 app.get('/', (_, r) => r.send('Bot alive ✓'));
 app.get('/qr', async (_, r) => {
